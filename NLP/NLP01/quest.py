@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from pecab import PeCab
+from nltk.translate.bleu_score import corpus_bleu
 
 # -------------------------------------------------------------------------------------------------------
 # Step 1 & 2: Data Handling and Preprocessing
@@ -271,6 +272,30 @@ class NMTManager:
         for i, tc in enumerate(test_cases):
             print(f"{i+1}) {tc[:4]}: {self.translate(tc, kor_tokenizer, eng_tokenizer)}")
 
+    def calculate_bleu(self, kor_corpus, eng_corpus, kor_tok, eng_tok):
+        print("\nCalculating BLEU Score...")
+        references = []
+        candidates = []
+
+        for kor, eng in tqdm(zip(kor_corpus, eng_corpus), total=len(kor_corpus), desc="Evaluating"):
+            # kor and eng are lists of tokens from tokenize_corpus
+            # We need the original sentence string for translate method (or tokens if we modify it)
+            # Reconstruct sentence for translate method
+            kor_sentence = " ".join(kor)
+            translation = self.translate(kor_sentence, kor_tok, eng_tok)
+            
+            # BLEU score needs list of tokens for both candidates and references
+            # eng_corpus already has <start> and <end>, we should remove them for BLEU
+            ref = [eng[1:-1]] # list of list of tokens
+            cand = translation.split()
+            
+            references.append(ref)
+            candidates.append(cand)
+
+        score = corpus_bleu(references, candidates)
+        print(f"Final BLEU Score: {score * 100:.2f}")
+        return score
+
 # -------------------------------------------------------------------------------------------------------
 # Execution Block
 # -------------------------------------------------------------------------------------------------------
@@ -300,13 +325,6 @@ def run_experiment(config, test_cases):
     kor_tokenizer.build_vocab(kor_corpus)
     eng_tokenizer.build_vocab(eng_corpus)
     
-    kor_tensor = handler.sequences_to_tensor(kor_corpus, kor_tokenizer)
-    eng_tensor = handler.sequences_to_tensor(eng_corpus, eng_tokenizer)
-    
-    # Dataset & Loader
-    dataset = TranslationDataset(kor_tensor, eng_tensor)
-    loader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True)
-
     # Model Initialization
     encoder = Encoder(config["vocab_size"], config["emb_dim"], config["hid_dim"]).to(config["device"])
     attention = BahdanauAttention(config["hid_dim"]).to(config["device"])
@@ -318,10 +336,25 @@ def run_experiment(config, test_cases):
 
     # NMT Management
     nmt = NMTManager(model, optimizer, criterion, config["device"], handler)
-    nmt.train(loader, config["epochs"], kor_tokenizer, eng_tokenizer)
+    
+    # Split data for evaluation (90% train, 10% test)
+    split_idx = int(len(kor_corpus) * 0.9)
+    train_kor, test_kor = kor_corpus[:split_idx], kor_corpus[split_idx:]
+    train_eng, test_eng = eng_corpus[:split_idx], eng_corpus[split_idx:]
+    
+    train_kor_tensor = handler.sequences_to_tensor(train_kor, kor_tokenizer)
+    train_eng_tensor = handler.sequences_to_tensor(train_eng, eng_tokenizer)
+    
+    train_dataset = TranslationDataset(train_kor_tensor, train_eng_tensor)
+    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True)
+
+    nmt.train(train_loader, config["epochs"], kor_tokenizer, eng_tokenizer)
+
+    # BLEU Evaluation
+    nmt.calculate_bleu(test_kor, test_eng, kor_tokenizer, eng_tokenizer)
 
     # Final Evaluation
-    print("\nFinal Evaluation:")
+    print("\nFinal Evaluation on Sample Cases:")
     for tc in test_cases:
         print(f"Kor: {tc} -> Eng: {nmt.translate(tc, kor_tokenizer, eng_tokenizer)}")
 

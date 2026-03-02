@@ -13,34 +13,34 @@ from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import sentencepiece as spm
 from pecab import PeCab
 from nltk.translate.bleu_score import corpus_bleu
+from typing import List, Tuple, Dict, Any, Optional
 
 # -------------------------------------------------------------------------------------------------------
 # Step 1 & 2: Data Handling and Preprocessing
 # -------------------------------------------------------------------------------------------------------
 
 class DataHandler:
-    def __init__(self, data_url, data_filename, ko_path, en_path, cache_path):
+    def __init__(self, data_url: str, data_filename: str, ko_path: str, en_path: str):
         self.data_url = data_url
         self.data_filename = data_filename
         self.ko_path = ko_path
         self.en_path = en_path
-        self.cache_path = cache_path
-        self.pecab = PeCab()
 
-    def download_data(self):
+    def download_data(self) -> None:
         print(f"Downloading {self.data_filename}...")
         urllib.request.urlretrieve(self.data_url, self.data_filename)
         print("Download complete.")
 
-    def extract_data(self):
+    def extract_data(self) -> None:
         print(f"Extracting {self.data_filename}...")
         with tarfile.open(self.data_filename, "r:gz") as tar:
             tar.extractall()
         print("Extraction complete.")
 
-    def load_raw_data(self):
+    def load_raw_data(self) -> List[Tuple[str, str]]:
         if not os.path.exists(self.ko_path) or not os.path.exists(self.en_path):
             if not os.path.exists(self.data_filename):
                 self.download_data()
@@ -55,43 +55,47 @@ class DataHandler:
         cleaned_corpus = list(set(zip(ko_corpus, en_corpus)))
         return cleaned_corpus
 
-    def preprocess_sentence(self, sentence, is_ko=False):
+    def preprocess_sentence(self, sentence: str) -> str:
         sentence = sentence.lower().strip()
-        if is_ko:
-            sentence = re.sub(r"([?.!,])", r" \1 ", sentence)
-            sentence = re.sub(r"[^ㄱ-ㅎㅏ-ㅣ가-힣0-9?.!,]+", " ", sentence)
-        else:
-            sentence = re.sub(r"([?.!,])", r" \1 ", sentence)
-            sentence = re.sub(r"[^a-zA-Z0-9?.!,]+", " ", sentence)
+        sentence = re.sub(r"([?.!,])", r" \1 ", sentence)
         sentence = re.sub(r'[" "]+', " ", sentence)
+        # Keep Korean, English, and basic punctuation
+        sentence = re.sub(r"[^ㄱ-ㅎㅏ-ㅣ가-힣a-zA-Z0-9?.!,]+", " ", sentence)
         return sentence.strip()
 
-    def tokenize_corpus(self, corpus, limit=10000):
-        if os.path.exists(self.cache_path):
-            print(f"Loading cached tokenized corpus from {self.cache_path}...")
-            with open(self.cache_path, "rb") as f:
-                return pickle.load(f)
+    def prepare_spm_data(self, corpus: List[Tuple[str, str]]) -> Tuple[str, str]:
+        ko_corpus_path = "ko_spm_corpus.txt"
+        en_corpus_path = "en_spm_corpus.txt"
+        
+        with open(ko_corpus_path, "w", encoding="utf-8") as f_ko, \
+             open(en_corpus_path, "w", encoding="utf-8") as f_en:
+            for ko, en in corpus:
+                f_ko.write(self.preprocess_sentence(ko) + "\n")
+                f_en.write(self.preprocess_sentence(en) + "\n")
+        
+        return ko_corpus_path, en_corpus_path
 
-        kor_corpus = []
-        eng_corpus = []
-        for ko, en in tqdm(corpus[:limit], desc="Preprocessing"):
-            ko_pre = self.preprocess_sentence(ko, is_ko=True)
-            en_pre = self.preprocess_sentence(en, is_ko=False)
-            ko_tokens = self.pecab.morphs(ko_pre)
-            en_tokens = ["<start>"] + en_pre.split() + ["<end>"]
-            if len(ko_tokens) <= 40 and len(en_tokens) <= 40:
-                kor_corpus.append(ko_tokens)
-                eng_corpus.append(en_tokens)
+    def train_sentencepiece(self, input_file: str, model_prefix: str, vocab_size: int) -> None:
+        print(f"Training SentencePiece for {model_prefix}...")
+        spm.SentencePieceTrainer.train(
+            input=input_file,
+            model_prefix=model_prefix,
+            vocab_size=vocab_size,
+            pad_id=0,
+            bos_id=1,
+            eos_id=2,
+            unk_id=3
+        )
 
-        print(f"Saving tokenized corpus to {self.cache_path}...")
-        with open(self.cache_path, "wb") as f:
-            pickle.dump((kor_corpus, eng_corpus), f)
-        return kor_corpus, eng_corpus
+    def load_tokenizer(self, model_path: str) -> spm.SentencePieceProcessor:
+        tokenizer = spm.SentencePieceProcessor()
+        tokenizer.load(model_path)
+        return tokenizer
 
-    def sequences_to_tensor(self, corpus, tokenizer, max_len=40):
+    def sequences_to_tensor(self, sentences: List[str], tokenizer: spm.SentencePieceProcessor, max_len: int = 40) -> torch.Tensor:
         tensor = []
-        for sentence in corpus:
-            ids = tokenizer.encode(sentence)
+        for sentence in sentences:
+            ids = [tokenizer.bos_id()] + tokenizer.encode(sentence) + [tokenizer.eos_id()]
             if len(ids) < max_len:
                 ids += [0] * (max_len - len(ids))
             else:
@@ -103,37 +107,15 @@ class DataHandler:
 # Step 3: Tokenization Classes
 # -------------------------------------------------------------------------------------------------------
 
-class Tokenizer:
-    def __init__(self, vocab_size):
-        self.vocab_size = vocab_size
-        self.word2idx = {"<pad>": 0, "<unk>": 1, "<start>": 2, "<end>": 3}
-        self.idx2word = {0: "<pad>", 1: "<unk>", 2: "<start>", 3: "<end>"}
-        self.counts = {}
-
-    def build_vocab(self, corpus):
-        for sentence in corpus:
-            for word in sentence:
-                self.counts[word] = self.counts.get(word, 0) + 1
-        sorted_words = sorted(self.counts.items(), key=lambda x: x[1], reverse=True)
-        for word, _ in sorted_words[:self.vocab_size - 4]:
-            if word not in self.word2idx:
-                idx = len(self.word2idx)
-                self.word2idx[word] = idx
-                self.idx2word[idx] = word
-
-    def encode(self, sentence):
-        return [self.word2idx.get(word, 1) for word in sentence]
-
-    def decode(self, ids):
-        return [self.idx2word.get(id, "<unk>") for id in ids]
+# Tokenizer is replaced by SentencePieceProcessor
 
 class TranslationDataset(Dataset):
-    def __init__(self, src_tensor, trg_tensor):
+    def __init__(self, src_tensor: torch.Tensor, trg_tensor: torch.Tensor):
         self.src = src_tensor
         self.trg = trg_tensor
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.src)
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.src[idx], self.trg[idx]
 
 # -------------------------------------------------------------------------------------------------------
@@ -141,13 +123,13 @@ class TranslationDataset(Dataset):
 # -------------------------------------------------------------------------------------------------------
 
 class BahdanauAttention(nn.Module):
-    def __init__(self, hidden_dim):
+    def __init__(self, hidden_dim: int):
         super().__init__()
         self.W1 = nn.Linear(hidden_dim, hidden_dim)
         self.W2 = nn.Linear(hidden_dim, hidden_dim)
         self.v = nn.Linear(hidden_dim, 1, bias=False)
 
-    def forward(self, hidden, encoder_outputs):
+    def forward(self, hidden: torch.Tensor, encoder_outputs: torch.Tensor) -> torch.Tensor:
         src_len = encoder_outputs.shape[0]
         hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
         encoder_outputs = encoder_outputs.permute(1, 0, 2)
@@ -156,25 +138,25 @@ class BahdanauAttention(nn.Module):
         return torch.softmax(attention, dim=1)
 
 class Encoder(nn.Module):
-    def __init__(self, vocab_size, emb_dim, hidden_dim):
+    def __init__(self, vocab_size: int, emb_dim: int, hidden_dim: int):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, emb_dim)
         self.rnn = nn.GRU(emb_dim, hidden_dim)
 
-    def forward(self, src):
+    def forward(self, src: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         embedded = self.embedding(src)
         outputs, hidden = self.rnn(embedded)
         return outputs, hidden
 
 class Decoder(nn.Module):
-    def __init__(self, vocab_size, emb_dim, hidden_dim, attention):
+    def __init__(self, vocab_size: int, emb_dim: int, hidden_dim: int, attention: nn.Module):
         super().__init__()
         self.attention = attention
         self.embedding = nn.Embedding(vocab_size, emb_dim)
         self.rnn = nn.GRU(emb_dim, hidden_dim)
         self.fc_out = nn.Linear(hidden_dim + hidden_dim, vocab_size)
 
-    def forward(self, input, hidden, encoder_outputs):
+    def forward(self, input: torch.Tensor, hidden: torch.Tensor, encoder_outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         input = input.unsqueeze(0)
         embedded = self.embedding(input)
         a = self.attention(hidden[-1], encoder_outputs).unsqueeze(1)
@@ -187,13 +169,13 @@ class Decoder(nn.Module):
         return prediction, hidden, a.squeeze(1)
 
 class Seq2SeqAttention(nn.Module):
-    def __init__(self, encoder, decoder, device):
+    def __init__(self, encoder: nn.Module, decoder: nn.Module, device: torch.device):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
 
-    def forward(self, src, trg=None, max_len=40):
+    def forward(self, src: torch.Tensor, trg: Optional[torch.Tensor] = None, max_len: int = 40) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         batch_size = src.shape[1]
         outputs = []
         attentions = []
@@ -222,14 +204,14 @@ class Seq2SeqAttention(nn.Module):
 # -------------------------------------------------------------------------------------------------------
 
 class NMTManager:
-    def __init__(self, model, optimizer, criterion, device, data_handler):
+    def __init__(self, model: nn.Module, optimizer: optim.Optimizer, criterion: nn.Module, device: torch.device, data_handler: DataHandler):
         self.model = model
         self.optimizer = optimizer
         self.criterion = criterion
         self.device = device
         self.data_handler = data_handler
 
-    def train(self, loader, epochs, kor_tokenizer, eng_tokenizer):
+    def train(self, loader: DataLoader, epochs: int, kor_tok: spm.SentencePieceProcessor, eng_tok: spm.SentencePieceProcessor) -> None:
         print("\nStarting Training...")
         for epoch in range(epochs):
             self.model.train()
@@ -238,6 +220,7 @@ class NMTManager:
             for src, trg in progress:
                 src, trg = src.permute(1, 0).to(self.device), trg.permute(1, 0).to(self.device)
                 self.optimizer.zero_grad()
+                # Teacher forcing: trg[:-1] is input, trg[1:] is target
                 output, _ = self.model(src, trg[:-1, :])
                 output = output.view(-1, self.model.decoder.fc_out.out_features)
                 trg_label = trg[1:, :].reshape(-1)
@@ -249,45 +232,39 @@ class NMTManager:
                 progress.set_postfix(loss=loss.item())
             
             print(f"Epoch {epoch+1} Loss: {epoch_loss/len(loader):.4f}")
-            self.evaluate_sample_cases(kor_tokenizer, eng_tokenizer)
+            self.evaluate_sample_cases(kor_tok, eng_tok)
 
-    def translate(self, sentence, kor_tok, eng_tok, max_len=40):
+    def translate(self, sentence: str, kor_tok: spm.SentencePieceProcessor, eng_tok: spm.SentencePieceProcessor, max_len: int = 40) -> str:
         self.model.eval()
-        pre = self.data_handler.preprocess_sentence(sentence, is_ko=True)
-        tokens = self.data_handler.pecab.morphs(pre)
-        ids = kor_tok.encode(tokens)
+        pre = self.data_handler.preprocess_sentence(sentence)
+        ids = [kor_tok.bos_id()] + kor_tok.encode(pre) + [kor_tok.eos_id()]
         src_tensor = torch.tensor(ids).unsqueeze(1).to(self.device)
         
         with torch.no_grad():
             output, _ = self.model(src_tensor, max_len=max_len)
         
         pred_ids = output.argmax(2).squeeze(1).cpu().tolist()
-        pred_tokens = eng_tok.decode(pred_ids)
-        if "<end>" in pred_tokens:
-            pred_tokens = pred_tokens[:pred_tokens.index("<end>")]
-        return " ".join(pred_tokens)
+        # Decode the predicted sequence
+        pred_sentence = eng_tok.decode(pred_ids)
+        return pred_sentence
 
-    def evaluate_sample_cases(self, kor_tokenizer, eng_tokenizer):
+    def evaluate_sample_cases(self, kor_tok: spm.SentencePieceProcessor, eng_tok: spm.SentencePieceProcessor) -> None:
         test_cases = ["오바마는 대통령이다.", "시민들은 도시 속에 산다."]
         for i, tc in enumerate(test_cases):
-            print(f"{i+1}) {tc[:4]}: {self.translate(tc, kor_tokenizer, eng_tokenizer)}")
+            print(f"{i+1}) {tc[:4]}: {self.translate(tc, kor_tok, eng_tok)}")
 
-    def calculate_bleu(self, kor_corpus, eng_corpus, kor_tok, eng_tok):
+    def calculate_bleu(self, test_ko_raw: List[str], test_en_raw: List[str], kor_tok: spm.SentencePieceProcessor, eng_tok: spm.SentencePieceProcessor) -> float:
         print("\nCalculating BLEU Score...")
         references = []
         candidates = []
 
-        for kor, eng in tqdm(zip(kor_corpus, eng_corpus), total=len(kor_corpus), desc="Evaluating"):
-            # kor and eng are lists of tokens from tokenize_corpus
-            # We need the original sentence string for translate method (or tokens if we modify it)
-            # Reconstruct sentence for translate method
-            kor_sentence = " ".join(kor)
-            translation = self.translate(kor_sentence, kor_tok, eng_tok)
+        for kor, eng in tqdm(zip(test_ko_raw, test_en_raw), total=len(test_ko_raw), desc="Evaluating"):
+            translation = self.translate(kor, kor_tok, eng_tok)
             
-            # BLEU score needs list of tokens for both candidates and references
-            # eng_corpus already has <start> and <end>, we should remove them for BLEU
-            ref = [eng[1:-1]] # list of list of tokens
-            cand = translation.split()
+            # Ground truth: split into tokens for BLEU calculation
+            # SentencePiece can return tokens as well
+            ref = [eng_tok.encode_as_pieces(self.data_handler.preprocess_sentence(eng))] 
+            cand = eng_tok.encode_as_pieces(translation)
             
             references.append(ref)
             candidates.append(cand)
@@ -300,7 +277,7 @@ class NMTManager:
 # Execution Block
 # -------------------------------------------------------------------------------------------------------
 
-def run_experiment(config, test_cases):
+def run_experiment(config: Dict[str, Any], test_cases: List[str]) -> None:
     # Print Configuration for experiment tracking
     print("\n" + "="*50)
     print("Experiment Configuration:")
@@ -313,17 +290,32 @@ def run_experiment(config, test_cases):
         config["data_url"], 
         config["data_filename"], 
         config["ko_path"], 
-        config["en_path"], 
-        config["cache_path"]
+        config["en_path"]
     )
     raw_data = handler.load_raw_data()
-    kor_corpus, eng_corpus = handler.tokenize_corpus(raw_data, limit=len(raw_data))
     
-    # Vocabulary & Tensors
-    kor_tokenizer = Tokenizer(config["vocab_size"])
-    eng_tokenizer = Tokenizer(config["vocab_size"])
-    kor_tokenizer.build_vocab(kor_corpus)
-    eng_tokenizer.build_vocab(eng_corpus)
+    # SentencePiece Training
+    ko_txt, en_txt = handler.prepare_spm_data(raw_data)
+    handler.train_sentencepiece(ko_txt, "ko_spm", config["vocab_size"])
+    handler.train_sentencepiece(en_txt, "en_spm", config["vocab_size"])
+    
+    # Load Tokenizers
+    kor_tok = handler.load_tokenizer("ko_spm.model")
+    eng_tok = handler.load_tokenizer("en_spm.model")
+    
+    # Split raw data for tensors and BLEU
+    # We use raw strings for SPM encoding and BLEU evaluation
+    split_idx = int(len(raw_data) * 0.9)
+    train_data, test_data = raw_data[:split_idx], raw_data[split_idx:]
+    
+    train_ko_raw = [pair[0] for pair in train_data]
+    train_en_raw = [pair[1] for pair in train_data]
+    test_ko_raw = [pair[0] for pair in test_data]
+    test_en_raw = [pair[1] for pair in test_data]
+
+    # Convert to Tensors
+    train_ko_tensor = handler.sequences_to_tensor(train_ko_raw, kor_tok)
+    train_en_tensor = handler.sequences_to_tensor(train_en_raw, eng_tok)
     
     # Model Initialization
     encoder = Encoder(config["vocab_size"], config["emb_dim"], config["hid_dim"]).to(config["device"])
@@ -337,28 +329,20 @@ def run_experiment(config, test_cases):
     # NMT Management
     nmt = NMTManager(model, optimizer, criterion, config["device"], handler)
     
-    # Split data for evaluation (90% train, 10% test)
-    split_idx = int(len(kor_corpus) * 0.9)
-    train_kor, test_kor = kor_corpus[:split_idx], kor_corpus[split_idx:]
-    train_eng, test_eng = eng_corpus[:split_idx], eng_corpus[split_idx:]
-    
-    train_kor_tensor = handler.sequences_to_tensor(train_kor, kor_tokenizer)
-    train_eng_tensor = handler.sequences_to_tensor(train_eng, eng_tokenizer)
-    
-    train_dataset = TranslationDataset(train_kor_tensor, train_eng_tensor)
+    train_dataset = TranslationDataset(train_ko_tensor, train_en_tensor)
     train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True)
 
-    nmt.train(train_loader, config["epochs"], kor_tokenizer, eng_tokenizer)
+    nmt.train(train_loader, config["epochs"], kor_tok, eng_tok)
 
     # BLEU Evaluation
-    nmt.calculate_bleu(test_kor, test_eng, kor_tokenizer, eng_tokenizer)
+    nmt.calculate_bleu(test_ko_raw, test_en_raw, kor_tok, eng_tok)
 
     # Final Evaluation
     print("\nFinal Evaluation on Sample Cases:")
     for tc in test_cases:
-        print(f"Kor: {tc} -> Eng: {nmt.translate(tc, kor_tokenizer, eng_tokenizer)}")
+        print(f"Kor: {tc} -> Eng: {nmt.translate(tc, kor_tok, eng_tok)}")
 
-def main():
+def main() -> None:
     # Configuration
     config = {
         "data_url": ("https://github.com/jungyeul/korean-parallel-corpora/raw/master/"

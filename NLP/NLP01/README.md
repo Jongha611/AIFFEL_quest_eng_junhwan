@@ -1,27 +1,34 @@
 # AIFFEL Campus Online Code Peer Review Templete
-- 코더 : 코더의 이름을 작성하세요.
-- 리뷰어 : 리뷰어의 이름을 작성하세요.
+- 코더 : 배준환
+- 리뷰어 : 박병인
 
 
 # PRT(Peer Review Template)
-- [ ]  **1. 주어진 문제를 해결하는 완성된 코드가 제출되었나요?**
+- [X]  **1. 주어진 문제를 해결하는 완성된 코드가 제출되었나요?**
     - 문제에서 요구하는 최종 결과물이 첨부되었는지 확인
         - 중요! 해당 조건을 만족하는 부분을 캡쳐해 근거로 첨부
-    
-- [ ]  **2. 전체 코드에서 가장 핵심적이거나 가장 복잡하고 이해하기 어려운 부분에 작성된 
+        <img width="934" height="695" alt="image" src="https://github.com/user-attachments/assets/682e4db0-e201-4b01-aba4-82673a725a3b" />
+        <img width="958" height="684" alt="image" src="https://github.com/user-attachments/assets/c9f71540-7605-4d02-b7c8-b6b18e579ff5" />
+
+- [X]  **2. 전체 코드에서 가장 핵심적이거나 가장 복잡하고 이해하기 어려운 부분에 작성된 
 주석 또는 doc string을 보고 해당 코드가 잘 이해되었나요?**
     - 해당 코드 블럭을 왜 핵심적이라고 생각하는지 확인
     - 해당 코드 블럭에 doc string/annotation이 달려 있는지 확인
     - 해당 코드의 기능, 존재 이유, 작동 원리 등을 기술했는지 확인
     - 주석을 보고 코드 이해가 잘 되었는지 확인
         - 중요! 잘 작성되었다고 생각되는 부분을 캡쳐해 근거로 첨부
-        
-- [ ]  **3. 에러가 난 부분을 디버깅하여 문제를 해결한 기록을 남겼거나
+        <img width="674" height="189" alt="image" src="https://github.com/user-attachments/assets/c941dcb0-a264-49a0-8ad6-e6289b12547b" />
+        <img width="792" height="702" alt="image" src="https://github.com/user-attachments/assets/aa709873-452b-413b-b62e-40f068fe7f5b" />
+
+- [X]  **3. 에러가 난 부분을 디버깅하여 문제를 해결한 기록을 남겼거나
 새로운 시도 또는 추가 실험을 수행해봤나요?**
     - 문제 원인 및 해결 과정을 잘 기록하였는지 확인
     - 프로젝트 평가 기준에 더해 추가적으로 수행한 나만의 시도, 
     실험이 기록되어 있는지 확인
         - 중요! 잘 작성되었다고 생각되는 부분을 캡쳐해 근거로 첨부
+        <img width="1026" height="609" alt="image" src="https://github.com/user-attachments/assets/a429deb3-a92b-41b1-ba75-ed0498671f97" />
+        <img width="614" height="767" alt="image" src="https://github.com/user-attachments/assets/0de71905-7d94-49da-b71a-2a4797d85767" />
+
         
 - [ ]  **4. 회고를 잘 작성했나요?**
     - 주어진 문제를 해결하는 완성된 코드 내지 프로젝트 결과물에 대해
@@ -41,3 +48,5 @@
 # 코드 리뷰 시 참고한 링크가 있다면 링크와 간략한 설명을 첨부합니다.
 # 코드 리뷰를 통해 개선한 코드가 있다면 코드와 간략한 설명을 첨부합니다.
 ```
+전반적으로 프로젝트 가이드에 부합하게 코드가 작성된 것 같습니다. 목차를 나눠 진행을 하여 리뷰어로서 코드가 순서대로 눈에 들어와 보기 좋았습니다.
+추후 에폭 수를 조금 더 늘려서 시도해보시면 더욱 유용한 시험이 될 것 같습니다.
